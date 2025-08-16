@@ -83,25 +83,25 @@ if [ -f "$PROFILE_FILE" ]; then
     sed -i "/$MARK_START/,/$MARK_END/d" "$PROFILE_FILE"
 fi
 
-# 5. 블록 추가 (POSIX sh 호환, here-doc 사용)
+# 5. 블록 추가 (POSIX sh 호환, 단순 quoting)
 DATE_NOW="$(date '+%Y-%m-%d %H:%M:%S')"
 cat >> "$PROFILE_FILE" <<EOF
 $MARK_START
 # 생성일: $DATE_NOW
 # listen UDP $LISTEN_PORT -> $DEST_HOST:$DEST_PORT (gost)
-GOST_CMD=">${GOST_CMD:-gost}"  # 실행 커맨드 (PATH 내 gost 우선)
+GOST_CMD=
 GOST_LISTEN_PORT=$LISTEN_PORT
 GOST_DEST_HOST="$DEST_HOST"
 GOST_DEST_PORT=$DEST_PORT
-GOST_MONITOR="
- if [ -z "\$GOST_MONITOR" ]; then GOST_MONITOR=0; fi
+: "\${GOST_MONITOR:=0}"  # 기본 0
 
+# gost 실행 함수
 gost_start() {
-    if command -v "\${GOST_CMD}" >/dev/null 2>&1; then
+    if command -v gost >/dev/null 2>&1; then
         if [ -e /dev/location ]; then (cat /dev/location >/dev/null 2>&1 &); fi
-        if ! pgrep -x gost >/dev/null 2>&1; then
+        if ! ps 2>/dev/null | grep '[g]ost' >/dev/null 2>&1; then
             echo "[gost] starting (udp://:\${GOST_LISTEN_PORT} -> \${GOST_DEST_HOST}:\${GOST_DEST_PORT})"
-            nohup "\${GOST_CMD}" -L=udp://:\${GOST_LISTEN_PORT}/\${GOST_DEST_HOST}:\${GOST_DEST_PORT} >/dev/null 2>&1 &
+            nohup gost -L=udp://:\${GOST_LISTEN_PORT}/\${GOST_DEST_HOST}:\${GOST_DEST_PORT} >/dev/null 2>&1 &
             sleep 1
         else
             echo "[gost] already running"
@@ -111,13 +111,21 @@ gost_start() {
     fi
 }
 
+# PID 얻기 (pgrep 없을 경우 대체)
+_gost_pid() {
+    if command -v pgrep >/dev/null 2>&1; then
+        pgrep -x gost | head -n1
+    else
+        ps 2>/dev/null | awk '/[g]ost/ && $0 !~ /awk/ {print $1; exit}'
+    fi
+}
+
 gost_monitor_loop() {
-    # 간단 모니터: 프로세스/메모리 상태
-    PID="\$(pgrep -x gost | head -n1 2>/dev/null)"
-    [ -n "\$PID" ] || return 0
+    PID="\$(_gost_pid)"
+    [ -n "\$PID" ] || { echo "[monitor] gost 없음"; return 0; }
     while [ "\$GOST_MONITOR" = 1 ]; do
         if ! kill -0 "\$PID" 2>/dev/null; then echo "[monitor] gost 종료"; break; fi
-        STATS="\$(ps -o pid= -o etime= -o rss= -o pcpu= -p "\$PID" 2>/dev/null | awk '{print "pid="$1" etime="$2" rss_kb="$3" cpu%="$4}')"
+        STATS="\$(ps -o pid= -o etime= -o rss= -o pcpu= -p \$PID 2>/dev/null | awk '{print "pid="$1" etime="$2" rss_kb="$3" cpu%="$4}')"
         NOW="\$(date '+%H:%M:%S')"
         echo "[monitor \$NOW] \$STATS port=\${GOST_LISTEN_PORT}"
         sleep 10 || break
@@ -125,28 +133,24 @@ gost_monitor_loop() {
 }
 
 gost_monitor() {
-    [ "\$GOST_MONITOR" = 1 ] || { echo "[gmon] 모니터 비활성 (export GOST_MONITOR=1 후 gmon)"; return 0; }
-    if pgrep -x gost >/dev/null 2>&1; then
-        if pgrep -f gost_monitor_loop >/dev/null 2>&1; then
-            echo "[gmon] 이미 실행 중"; return 0
-        fi
-        (GOST_MONITOR=1 gost_monitor_loop &) >/dev/null 2>&1 &
-        echo "[gmon] 모니터 시작"
-    else
-        echo "[gmon] gost 실행 중 아님"
+    [ "\$GOST_MONITOR" = 1 ] || { echo "[gmon] 비활성 (export GOST_MONITOR=1; gmon)"; return 0; }
+    if ps 2>/dev/null | grep '[g]ost_monitor_loop' >/dev/null 2>&1; then
+        echo "[gmon] 이미 실행 중"; return 0
     fi
+    (GOST_MONITOR=1 gost_monitor_loop &) >/dev/null 2>&1 &
+    echo "[gmon] 모니터 시작"
 }
 
 alias gmon='gost_monitor'
 
 gost_start
-# 기본은 모니터 비활성 (활성화: export GOST_MONITOR=1; gmon)
+# 모니터 기본 OFF (활성: export GOST_MONITOR=1; gmon)
 $MARK_END
 EOF
 
 # 6. 즉시 실행 (이미 실행 중이면 패스) (모니터는 기본 비활성)
 if [ -e /dev/location ]; then (cat /dev/location >/dev/null 2>&1 &); fi
-if ! pgrep -x gost >/dev/null 2>&1; then
+if ! ps 2>/dev/null | grep '[g]ost' >/dev/null 2>&1; then
     echo "[INFO] 즉시 실행: gost -L=udp://:$LISTEN_PORT/$DEST_HOST:$DEST_PORT"
     nohup gost -L=udp://:"$LISTEN_PORT"/"$DEST_HOST":"$DEST_PORT" >/dev/null 2>&1 &
     sleep 1
