@@ -19,5 +19,6 @@ apk upgrade &&
 apk add git && 
 git clone https://github.com/TwoTwo-me/udp-redirect && 
 cd udp-redirect
+chmod +x ./setup.bash
 ./setup.bash
 ```
