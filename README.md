@@ -16,7 +16,7 @@
 ```
 apk update && 
 apk upgrade &&
-apk add gcc make build-base git && 
+apk add git && 
 git clone https://github.com/TwoTwo-me/udp-redirect && 
 cd udp-redirect
 ./setup.bash
