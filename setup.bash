@@ -39,7 +39,7 @@ if [ -z "$DEST_HOST" ]; then
 # 3. gost 자동 설치 (없을 경우 linux 386 바이너리)
 GOST_VERSION="2.12.0"
 GOST_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_386.tar.gz"
-INSTALL_DIR="$HOME/bin"
+INSTALL_DIR="/bin"
 if ! command -v gost >/dev/null 2>&1; then
     echo "[INFO] gost 미존재 → 자동 설치 시도 (${GOST_URL})"
     mkdir -p "$INSTALL_DIR"
