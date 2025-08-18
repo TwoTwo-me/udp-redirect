@@ -1,11 +1,9 @@
-# Pythonista: Multi-Client UDP Relay with Background Audio (Performance Optimized)
-# 다중 클라이언트를 지원하며, UDP 패킷을 중계하면서 동시에 무음 오디오를 재생하여
-# 백그라운드 실행을 유지합니다. 출력은 별도 스레드에서 주기적으로 업데이트합니다.
+# Pythonista: Multi-Client UDP Relay (Performance Optimized)
+# 다중 클라이언트를 지원하며, UDP 패킷을 중계하고 상태를 주기적으로 출력합니다.
 
 import sys
 import socket
 import threading
-import sound
 import os
 import time
 
@@ -14,40 +12,14 @@ LOCAL_PORT = int(os.environ.get('LOCAL_PORT', '51820'))
 REMOTE_HOST = os.environ.get('REMOTE_HOST', '127.0.0.1')
 REMOTE_PORT = int(os.environ.get('REMOTE_PORT', '51820'))
 # 클라이언트 세션 타임아웃 (초). 이 시간 동안 활동이 없으면 목록에서 제거됩니다.
-CLIENT_TIMEOUT = 180 # 3분
+CLIENT_TIMEOUT = 180  # 3분
 
 # --- 전역 변수 (Global Variables for Thread Communication) ---
 bytes_sent = 0
 bytes_received = 0
-# 여러 클라이언트를 관리하기 위한 딕셔너리. { client_addr: last_seen_timestamp }
 active_clients = {}
-# 스레드 간의 안전한 데이터 접근을 위한 잠금(Lock)
 lock = threading.Lock()
-# 스레드 간의 안전한 종료를 위한 플래그
 shutdown_flag = threading.Event()
-
-# --- 백그라운드 오디오 작업 (Background Audio Task) ---
-class BackgroundTask:
-    def __init__(self, silent_wav_file='Silent.wav'):
-        self.wav_file = silent_wav_file
-        self.player = None
-        
-        if os.path.exists(self.wav_file):
-            self.player = sound.Player(self.wav_file)
-            self.player.number_of_loops = -1
-        else:
-            print(f"경고: '{self.wav_file}' 파일을 찾을 수 없습니다.")
-            print("백그라운드 오디오 기능이 작동하지 않습니다.")
-
-    def run(self):
-        if self.player:
-            print("백그라운드 오디오 재생을 시작합니다.")
-            self.player.play()
-
-    def stop(self):
-        if self.player and self.player.playing:
-            print("\n백그라운드 오디오 재생을 중지합니다.")
-            self.player.stop()
 
 # --- 상태 출력 및 클라이언트 정리 스레드 ---
 def maintenance_thread(server_info):
@@ -128,22 +100,15 @@ def relay_udp(local_port, remote_host, remote_port):
 
 # --- 스크립트 실행 ---
 if __name__ == "__main__":
-    bg_task = BackgroundTask()
-    
-    audio_thread = threading.Thread(target=bg_task.run)
-    audio_thread.daemon = True
-    audio_thread.start()
-    
     maintenance_and_status_thread = threading.Thread(target=maintenance_thread, args=((REMOTE_HOST, REMOTE_PORT),))
     maintenance_and_status_thread.daemon = True
     maintenance_and_status_thread.start()
-    
+
     try:
         relay_udp(LOCAL_PORT, REMOTE_HOST, REMOTE_PORT)
     except KeyboardInterrupt:
         print("\n사용자에 의해 스크립트가 중단되었습니다.")
     finally:
         shutdown_flag.set()
-        bg_task.stop()
         time.sleep(1.1)
         print("\n프로그램을 종료합니다.")
