@@ -1,162 +1,116 @@
 #!/bin/sh
-# setup.bash - gost 기반 UDP 프록시 초기 설정 스크립트 (udp-redirect -> gost 전환)
+# setup.bash - Multi-Client UDP Relay 자동 설정 (Python UDP-Relay.py)
 # iSH (Alpine) 및 busybox ash 호환 (POSIX sh)
-# 목적: 사용자 입력을 받아 ~/.profile 에 gost 자동 실행 블록을 (중복 없이) 추가.
+# 기능:
+#  1) LOCAL_PORT / REMOTE_HOST / REMOTE_PORT 입력 받아 환경변수로 영속화 (~/.profile)
+#  2) python3 (apk 사용 가능 시) 설치
+#  3) 로그인 시 python3 UDP-Relay.py 자동 실행 (중복 방지)
 
 set -e
 
 SCRIPT_DIR="$(pwd)"
 PROFILE_FILE="$HOME/.profile"
-MARK_START="# >>> gost auto-start >>>"
-MARK_END="# <<< gost auto-start <<<"
+MARK_START="# >>> udp relay auto-start >>>"
+MARK_END="# <<< udp relay auto-start <<<"
 
-# 1. 사용자 입력
-printf "Listen Port: "
+# 1. 사용자 입력 (이미 환경변수 있으면 기본값)
+DEFAULT_LISTEN="${LOCAL_PORT:-51820}"
+DEFAULT_HOST="${REMOTE_HOST:-127.0.0.1}"
+DEFAULT_RPORT="${REMOTE_PORT:-51820}"
+printf "Listen Port (default: %s): " "$DEFAULT_LISTEN"
 read LISTEN_PORT
-printf "Destination Host: "
+[ -n "$LISTEN_PORT" ] || LISTEN_PORT="$DEFAULT_LISTEN"
+printf "Destination Host (default: %s): " "$DEFAULT_HOST"
 read DEST_HOST
-printf "Destination Port: "
+[ -n "$DEST_HOST" ] || DEST_HOST="$DEFAULT_HOST"
+printf "Destination Port (default: %s): " "$DEFAULT_RPORT"
 read DEST_PORT
+[ -n "$DEST_PORT" ] || DEST_PORT="$DEFAULT_RPORT"
 
 # 2. 검증 함수
 is_port() {
-    case "$1" in
-        ''|*[!0-9]*) return 1;;
-    esac
-    if [ "$1" -lt 1 ] || [ "$1" -gt 65535 ]; then
-        return 1
-    fi
+    case "$1" in ''|*[!0-9]*) return 1;; esac
+    if [ "$1" -lt 1 ] || [ "$1" -gt 65535 ]; then return 1; fi
     return 0
 }
 
-if ! is_port "$LISTEN_PORT"; then
-    echo "[ERROR] Listen Port 값이 올바르지 않습니다." >&2; exit 1; fi
-if ! is_port "$DEST_PORT"; then
-    echo "[ERROR] Destination Port 값이 올바르지 않습니다." >&2; exit 1; fi
-if [ -z "$DEST_HOST" ]; then
-    echo "[ERROR] Destination Host 가 비어 있습니다." >&2; exit 1; fi
+if ! is_port "$LISTEN_PORT"; then echo "[ERROR] Listen Port 값이 올바르지 않습니다." >&2; exit 1; fi
+if ! is_port "$DEST_PORT"; then echo "[ERROR] Destination Port 값이 올바르지 않습니다." >&2; exit 1; fi
+if [ -z "$DEST_HOST" ]; then echo "[ERROR] Destination Host 가 비어 있습니다." >&2; exit 1; fi
 
-# 3. gost 자동 설치 (없을 경우 linux 386 바이너리)
-GOST_VERSION="2.12.0"
-GOST_URL="https://github.com/ginuerzh/gost/releases/download/v${GOST_VERSION}/gost_${GOST_VERSION}_linux_386.tar.gz"
-INSTALL_DIR="/bin"
-if ! command -v gost >/dev/null 2>&1; then
-    echo "[INFO] gost 미존재 → 자동 설치 시도 (${GOST_URL})"
-    mkdir -p "$INSTALL_DIR"
-    TEMP_DIR="/tmp/gost_install_$$"
-    mkdir -p "$TEMP_DIR"
-    ARCHIVE_PATH="$TEMP_DIR/gost.tar.gz"
-    # 다운로드 도구 선택
-    if command -v wget >/dev/null 2>&1; then
-        wget -O "$ARCHIVE_PATH" "$GOST_URL" || { echo "[ERROR] wget 다운로드 실패" >&2; exit 1; }
-    elif command -v curl >/dev/null 2>&1; then
-        curl -L -o "$ARCHIVE_PATH" "$GOST_URL" || { echo "[ERROR] curl 다운로드 실패" >&2; exit 1; }
+# 2.5 python3 설치 (apk 존재 & 미설치 시)
+if ! command -v python3 >/dev/null 2>&1; then
+    if command -v apk >/dev/null 2>&1; then
+        echo "[INFO] python3 미존재 → apk add python3"
+        if apk add --no-cache python3 >/dev/null 2>&1; then
+            echo "[INFO] python3 설치 완료"
+        else
+            echo "[WARN] python3 설치 실패 (권한/네트워크 문제)" >&2
+        fi
     else
-        echo "[ERROR] wget 또는 curl 이 없습니다. 수동 설치 필요." >&2; exit 1
+        echo "[WARN] apk 명령이 없어 python3 자동 설치 생략" >&2
     fi
-    # 압축 해제
-    if ! tar -xf "$ARCHIVE_PATH" -C "$TEMP_DIR" 2>/dev/null; then
-        echo "[ERROR] tar 해제 실패" >&2; exit 1
-    fi
-    # gost 바이너리 탐색 및 설치
-    FOUND_GOST="$(find "$TEMP_DIR" -maxdepth 2 -type f -name gost 2>/dev/null | head -n1)"
-    if [ -z "$FOUND_GOST" ]; then
-        echo "[ERROR] gost 바이너리 찾지 못함" >&2; exit 1
-    fi
-    mv "$FOUND_GOST" "$INSTALL_DIR/gost" || { echo "[ERROR] gost 이동 실패" >&2; exit 1; }
-    chmod +x "$INSTALL_DIR/gost"
-    rm -rf "$TEMP_DIR"
-    echo "[INFO] gost 설치 완료: $INSTALL_DIR/gost"
-    # PATH 안내 (현재 셸 PATH 미포함 가능성)
-    case ":$PATH:" in
-        *":$INSTALL_DIR:"*) :;;
-        *) echo "[WARN] 현재 PATH에 $INSTALL_DIR 가 없습니다. 필요시 export PATH=\"$INSTALL_DIR:$PATH\"" >&2;;
-    esac
 fi
 
-if ! command -v gost >/dev/null 2>&1; then
-    echo "[ERROR] gost 명령을 여전히 찾을 수 없습니다." >&2; exit 1
-fi
-
-# 4. 기존 블록 제거 (idempotent)
+# 3. 기존 자동 블록 제거 (idempotent)
 if [ -f "$PROFILE_FILE" ]; then
     sed -i "/$MARK_START/,/$MARK_END/d" "$PROFILE_FILE"
 fi
 
-# 5. 블록 추가 (POSIX sh 호환, 단순 quoting)
+# 4. 자동 실행 블록 작성
 DATE_NOW="$(date '+%Y-%m-%d %H:%M:%S')"
+RELAY_SCRIPT="$SCRIPT_DIR/UDP-Relay.py"
 cat >> "$PROFILE_FILE" <<EOF
 $MARK_START
 # 생성일: $DATE_NOW
-# listen UDP $LISTEN_PORT -> $DEST_HOST:$DEST_PORT (gost)
-GOST_CMD=
-GOST_LISTEN_PORT=$LISTEN_PORT
-GOST_DEST_HOST="$DEST_HOST"
-GOST_DEST_PORT=$DEST_PORT
-: "\${GOST_MONITOR:=0}"  # 기본 0
+# Python UDP Relay 환경변수 (영속)
+export LOCAL_PORT=$LISTEN_PORT
+export REMOTE_HOST="$DEST_HOST"
+export REMOTE_PORT=$DEST_PORT
+export UDP_RELAY_SCRIPT="$RELAY_SCRIPT"
 
-# gost 실행 함수
-gost_start() {
-    if command -v gost >/dev/null 2>&1; then
-        if [ -e /dev/location ]; then (cat /dev/location >/dev/null 2>&1 &); fi
-        if ! ps 2>/dev/null | grep '[g]ost' >/dev/null 2>&1; then
-            echo "[gost] starting (udp://:\${GOST_LISTEN_PORT} -> \${GOST_DEST_HOST}:\${GOST_DEST_PORT})"
-            nohup gost -L=udp://:\${GOST_LISTEN_PORT}/\${GOST_DEST_HOST}:\${GOST_DEST_PORT} >/dev/null 2>&1 &
-            sleep 1
-        else
-            echo "[gost] already running"
-        fi
-    else
-        echo "[gost] not found in PATH" >&2
+udp_relay_start() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "[relay] python3 을 찾을 수 없습니다." >&2; return 1
     fi
-}
-
-# PID 얻기 (pgrep 없을 경우 대체)
-_gost_pid() {
-    if command -v pgrep >/dev/null 2>&1; then
-        pgrep -x gost | head -n1
-    else
-        ps 2>/dev/null | awk '/[g]ost/ && $0 !~ /awk/ {print $1; exit}'
+    if [ ! -f "\$UDP_RELAY_SCRIPT" ]; then
+        echo "[relay] 스크립트가 존재하지 않습니다: \$UDP_RELAY_SCRIPT" >&2; return 1
     fi
-}
-
-gost_monitor_loop() {
-    PID="\$(_gost_pid)"
-    [ -n "\$PID" ] || { echo "[monitor] gost 없음"; return 0; }
-    while [ "\$GOST_MONITOR" = 1 ]; do
-        if ! kill -0 "\$PID" 2>/dev/null; then echo "[monitor] gost 종료"; break; fi
-        STATS="\$(ps -o pid= -o etime= -o rss= -o pcpu= -p \$PID 2>/dev/null | awk '{print "pid="$1" etime="$2" rss_kb="$3" cpu%="$4}')"
-        NOW="\$(date '+%H:%M:%S')"
-        echo "[monitor \$NOW] \$STATS port=\${GOST_LISTEN_PORT}"
-        sleep 10 || break
-    done
-}
-
-gost_monitor() {
-    [ "\$GOST_MONITOR" = 1 ] || { echo "[gmon] 비활성 (export GOST_MONITOR=1; gmon)"; return 0; }
-    if ps 2>/dev/null | grep '[g]ost_monitor_loop' >/dev/null 2>&1; then
-        echo "[gmon] 이미 실행 중"; return 0
+    if ps 2>/dev/null | grep '[U]DP-Relay.py' >/dev/null 2>&1; then
+        echo "[relay] 이미 실행 중"
+        return 0
     fi
-    (GOST_MONITOR=1 gost_monitor_loop &) >/dev/null 2>&1 &
-    echo "[gmon] 모니터 시작"
+    echo "[relay] starting UDP-Relay.py (LOCAL_PORT=\$LOCAL_PORT -> \$REMOTE_HOST:\$REMOTE_PORT)"
+    # nohup 및 출력 무시 제거: 셸에 출력 보이도록 백그라운드 실행
+    python3 "\$UDP_RELAY_SCRIPT" &
+    sleep 1
 }
 
-alias gmon='gost_monitor'
-
-gost_start
-# 모니터 기본 OFF (활성: export GOST_MONITOR=1; gmon)
+alias relay='udp_relay_start'
+udp_relay_start
 $MARK_END
 EOF
 
-# 6. 즉시 실행 (이미 실행 중이면 패스) (모니터는 기본 비활성)
-if [ -e /dev/location ]; then (cat /dev/location >/dev/null 2>&1 &); fi
-if ! ps 2>/dev/null | grep '[g]ost' >/dev/null 2>&1; then
-    echo "[INFO] 즉시 실행: gost -L=udp://:$LISTEN_PORT/$DEST_HOST:$DEST_PORT"
-    nohup gost -L=udp://:"$LISTEN_PORT"/"$DEST_HOST":"$DEST_PORT" >/dev/null 2>&1 &
-    sleep 1
+# 5. 즉시 실행 (이미 실행 중이면 패스)
+if ! ps 2>/dev/null | grep '[U]DP-Relay.py' >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1; then
+        if [ -f "$RELAY_SCRIPT" ]; then
+            echo "[INFO] 즉시 실행: python3 $RELAY_SCRIPT (LOCAL_PORT=$LISTEN_PORT -> $DEST_HOST:$DEST_PORT)"
+            # nohup 제거, 출력 표시
+            python3 "$RELAY_SCRIPT" &
+            sleep 1
+        else
+            echo "[WARN] 스크립트 없음: $RELAY_SCRIPT" >&2
+        fi
+    else
+        echo "[WARN] python3 미설치. 로그인 후 relay 명령 전 설치 필요." >&2
+    fi
+else
+    echo "[INFO] 이미 실행 중 (UDP-Relay.py)"
 fi
 
 echo
-echo "[DONE] ~/.profile 에 gost 자동 실행 블록이 추가되었습니다. (모니터 ON: export GOST_MONITOR=1; gmon)"
+echo "[DONE] ~/.profile 에 UDP Relay 자동 실행 블록 추가 (환경변수 LOCAL_PORT/REMOTE_HOST/REMOTE_PORT)."
+echo "[HINT] 설정 변경 시 다시 실행하거나 ~/.profile 수정 후 새 셸 시작."
 echo "[PATH] $PROFILE_FILE"
 echo
